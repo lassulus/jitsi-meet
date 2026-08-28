@@ -62,9 +62,18 @@ allprojects {
 
     // Make sure we use the react-native version in node_modules and not the one
     // published in jcenter / elsewhere.
+    //
+    // Also substitute the stock org.jitsi:webrtc build with the API-compatible
+    // webrtc-sdk (LiveKit-maintained) build, which additionally exposes
+    // ExternalAudioProcessingFactory. That hook is used to run DeepFilterNet3
+    // based noise cancellation on the microphone capture path (see
+    // org.jitsi.meet.sdk.NoiseSuppression).
     configurations.all {
         resolutionStrategy {
             eachDependency { DependencyResolveDetails details ->
+                if (details.requested.group == 'org.jitsi' && details.requested.name == 'webrtc') {
+                    details.useTarget 'io.github.webrtc-sdk:android:125.6422.07'
+                }
                 if (details.requested.group == 'com.facebook.react') {
                     if (details.requested.name == 'react-native') {
                         details.useTarget "com.facebook.react:react-android:$rnVersion"
@@ -200,6 +209,10 @@ subprojects { subproject ->
 
             android {
                 buildToolsVersion rootProject.ext.buildToolsVersion
+
+                // Pin the NDK so native-building modules don't fall back to
+                // the AGP default, which may not be installed.
+                ndkVersion rootProject.ext.ndkVersion
 
                 buildFeatures {
                     buildConfig true

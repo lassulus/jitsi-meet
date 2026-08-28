@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script is executed bt Gradle to start the React packager for Debug
 # targets.

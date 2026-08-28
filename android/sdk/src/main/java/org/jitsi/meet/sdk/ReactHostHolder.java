@@ -225,6 +225,9 @@ class ReactHostHolder {
             }
         }
 
+        // Install DeepFilterNet3 noise cancellation on the capture path.
+        NoiseSuppression.install(options);
+
         JitsiMeetLogger.d(TAG + " initializing RN");
 
         // Same construction getDefaultReactHost() does, minus its private static cache

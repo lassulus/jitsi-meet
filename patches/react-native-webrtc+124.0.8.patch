@@ -1,0 +1,51 @@
+diff --git a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java
+index d5a9fb4..450261b 100644
+--- a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java
++++ b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java
+@@ -73,6 +73,7 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
+         Loggable injectableLogger = options.injectableLogger;
+         Logging.Severity loggingSeverity = options.loggingSeverity;
+         String fieldTrials = options.fieldTrials;
++        AudioProcessingFactory audioProcessingFactory = options.audioProcessingFactory;
+ 
+         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(reactContext)
+                         .setFieldTrials(fieldTrials)
+@@ -104,11 +105,16 @@ public class WebRTCModule extends ReactContextBaseJavaModule {
+         Log.d(TAG, "Using video encoder factory: " + encoderFactory.getClass().getCanonicalName());
+         Log.d(TAG, "Using video decoder factory: " + decoderFactory.getClass().getCanonicalName());
+ 
+-        mFactory = PeerConnectionFactory.builder()
++        PeerConnectionFactory.Builder factoryBuilder = PeerConnectionFactory.builder()
+                            .setAudioDeviceModule(adm)
+                            .setVideoEncoderFactory(encoderFactory)
+-                           .setVideoDecoderFactory(decoderFactory)
+-                           .createPeerConnectionFactory();
++                           .setVideoDecoderFactory(decoderFactory);
++
++        if (audioProcessingFactory != null) {
++            factoryBuilder.setAudioProcessingFactory(audioProcessingFactory);
++        }
++
++        mFactory = factoryBuilder.createPeerConnectionFactory();
+ 
+         // PeerConnectionFactory now owns the adm native pointer, and we don't need it anymore.
+         adm.release();
+diff --git a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModuleOptions.java b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModuleOptions.java
+index 01d31d7..6188c03 100644
+--- a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModuleOptions.java
++++ b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModuleOptions.java
+@@ -1,5 +1,6 @@
+ package com.oney.WebRTCModule;
+ 
++import org.webrtc.AudioProcessingFactory;
+ import org.webrtc.Loggable;
+ import org.webrtc.Logging;
+ import org.webrtc.VideoDecoderFactory;
+@@ -12,6 +13,7 @@ public class WebRTCModuleOptions {
+     public VideoEncoderFactory videoEncoderFactory;
+     public VideoDecoderFactory videoDecoderFactory;
+     public AudioDeviceModule audioDeviceModule;
++    public AudioProcessingFactory audioProcessingFactory;
+     public Loggable injectableLogger;
+     public Logging.Severity loggingSeverity;
+     public String fieldTrials;
