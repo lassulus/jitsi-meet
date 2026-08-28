@@ -194,6 +194,7 @@ dependencies = [
  "deep_filter",
  "jni",
  "ndarray",
+ "rubato",
 ]
 
 [[package]]

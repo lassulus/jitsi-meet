@@ -23,8 +23,10 @@ extra assets.
   post-processing*: it runs on every 10 ms microphone frame after echo
   cancellation and before encoding — for all conferences, with no
   renegotiation.
-- Frames arrive as 480 float32 samples (10 ms @ 48 kHz), exactly the DFN3 hop
-  size, and are denoised in place by `libdfjni.so`.
+- Frames arrive as 10 ms float32 chunks and are denoised in place by
+  `libdfjni.so`. 48 kHz (the APM rate on virtually all Android hardware)
+  feeds the DFN3 hop size of 480 samples directly; 16 and 32 kHz streams
+  (e.g. Bluetooth HFP headsets) are resampled to 48 kHz inside the engine.
 
 Noise cancellation is **enabled by default**. Hosting apps can toggle it at
 runtime:
@@ -34,7 +36,7 @@ org.jitsi.meet.sdk.NoiseSuppression.setEnabled(false);
 ```
 
 If the native library is missing for the current ABI or the audio pipeline
-runs at an unexpected rate, audio passes through unprocessed.
+runs at an unsupported rate, audio passes through unprocessed.
 
 ## Building the native library
 

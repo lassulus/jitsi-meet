@@ -16,6 +16,8 @@ deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet.git", tag = "v0
 jni = "0.21"
 anyhow = "1"
 ndarray = "0.15"
+# Same version the deep_filter tract feature already pulls in transitively.
+rubato = "0.14"
 
 [profile.release]
 lto = true

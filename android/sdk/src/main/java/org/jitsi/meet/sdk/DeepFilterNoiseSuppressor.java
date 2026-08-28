@@ -28,9 +28,10 @@ import org.webrtc.ExternalAudioProcessingFactory;
  * encoding.
  *
  * The webrtc-sdk external processing hook delivers 10 ms fullband frames as
- * float32 samples in the int16 value range. DFN3 operates on 480-sample
- * frames at 48 kHz, which is exactly what the APM produces on virtually all
- * Android devices; any other rate is passed through untouched.
+ * float32 samples in the int16 value range. DFN3 operates at 48 kHz — the
+ * APM rate on virtually all Android hardware; 16 and 32 kHz streams (e.g.
+ * Bluetooth HFP headsets) are resampled inside the engine. Any other rate is
+ * passed through untouched.
  *
  * The engine is created on a background thread at construction time because
  * model loading takes hundreds of milliseconds, while
@@ -60,10 +61,9 @@ class DeepFilterNoiseSuppressor implements ExternalAudioProcessingFactory.AudioP
 
     /** Engine handle owned by the audio capture thread. */
     private long handle;
-    private int engineFrameLength;
-    private int engineSampleRate;
     private int streamSampleRate;
     private boolean warnedPassthrough;
+    private boolean loggedEngaged;
 
     DeepFilterNoiseSuppressor() {
         Thread loader = new Thread(() -> {
@@ -90,8 +90,6 @@ class DeepFilterNoiseSuppressor implements ExternalAudioProcessingFactory.AudioP
             long h = pendingHandle.getAndSet(0);
             if (h != 0) {
                 handle = h;
-                engineFrameLength = DeepFilterNet.nativeFrameLength(h);
-                engineSampleRate = DeepFilterNet.nativeSampleRate(h);
             }
         }
         return handle != 0;
@@ -100,6 +98,8 @@ class DeepFilterNoiseSuppressor implements ExternalAudioProcessingFactory.AudioP
     @Override
     public void initialize(int sampleRateHz, int numChannels) {
         streamSampleRate = sampleRateHz;
+        warnedPassthrough = false;
+        loggedEngaged = false;
         ensureEngine();
         JitsiMeetLogger.i(TAG + " initialized: sampleRate=" + sampleRateHz + " channels=" + numChannels);
     }
@@ -107,6 +107,8 @@ class DeepFilterNoiseSuppressor implements ExternalAudioProcessingFactory.AudioP
     @Override
     public void reset(int newRate) {
         streamSampleRate = newRate;
+        warnedPassthrough = false;
+        loggedEngaged = false;
     }
 
     @Override
@@ -116,20 +118,24 @@ class DeepFilterNoiseSuppressor implements ExternalAudioProcessingFactory.AudioP
         }
 
         // The buffer holds `numFrames` fullband float32 samples = 10 ms.
-        if (streamSampleRate != engineSampleRate
-                || numFrames != engineFrameLength
-                || !buffer.isDirect()
-                || buffer.capacity() < numFrames * 4) {
+        // The engine handles 48 kHz natively and resamples 16/32 kHz streams;
+        // anything else is left untouched (it returns NaN).
+        float lsnr = Float.NaN;
+        if (buffer.isDirect() && buffer.capacity() >= numFrames * 4) {
+            lsnr = DeepFilterNet.nativeProcessInPlace(
+                handle, buffer, numFrames, streamSampleRate, WEBRTC_FLOAT_SCALE);
+        }
+
+        if (Float.isNaN(lsnr)) {
             if (!warnedPassthrough) {
                 warnedPassthrough = true;
                 JitsiMeetLogger.w(
                     TAG + " passthrough: rate=" + streamSampleRate + " frames=" + numFrames
-                        + " direct=" + buffer.isDirect()
-                        + " (engine wants " + engineSampleRate + "/" + engineFrameLength + ")");
+                        + " direct=" + buffer.isDirect());
             }
-            return;
+        } else if (!loggedEngaged) {
+            loggedEngaged = true;
+            JitsiMeetLogger.i(TAG + " engaged: rate=" + streamSampleRate + " frames=" + numFrames);
         }
-
-        DeepFilterNet.nativeProcessInPlace(handle, buffer, numFrames, WEBRTC_FLOAT_SCALE);
     }
 }

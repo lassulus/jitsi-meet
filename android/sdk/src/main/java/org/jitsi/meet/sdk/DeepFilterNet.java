@@ -68,18 +68,24 @@ final class DeepFilterNet {
     static native int nativeSampleRate(long handle);
 
     /**
-     * Denoises one frame in place.
+     * Denoises one 10 ms frame in place.
+     *
+     * Streams at 16 or 32 kHz are resampled to the model rate internally;
+     * 48 kHz is processed directly.
      *
      * @param handle native engine handle.
      * @param buffer direct {@link ByteBuffer} over {@code numFrames}
      * native-endian float32 samples.
      * @param numFrames number of samples; must equal
-     * {@link #nativeFrameLength(long)}.
+     * {@code sampleRateHz / 100} (one 10 ms frame).
+     * @param sampleRateHz stream sample rate; 16000, 32000 or 48000.
      * @param scale full-scale value of the input samples (the model expects
      * [-1, 1]; WebRTC AudioBuffer floats use the int16 range, so pass 32768).
-     * @return the local SNR estimate, or NaN if the frame was left untouched.
+     * @return the local SNR estimate, or NaN if the frame was left untouched
+     * (invalid arguments or unsupported rate).
      */
-    static native float nativeProcessInPlace(long handle, ByteBuffer buffer, int numFrames, float scale);
+    static native float nativeProcessInPlace(
+        long handle, ByteBuffer buffer, int numFrames, int sampleRateHz, float scale);
 
     /** Releases the engine. Passing 0 is a no-op. */
     static native void nativeFree(long handle);
