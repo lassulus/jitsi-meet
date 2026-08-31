@@ -54,12 +54,26 @@ final class DeepFilterNet {
     }
 
     /**
-     * Creates a single-channel DeepFilterNet3 engine.
+     * Creates a single-channel DeepFilterNet engine from a model archive.
      *
-     * @param attenLimDb maximum noise attenuation in dB; 0 means unlimited.
-     * @return native handle, or 0 on failure.
+     * @param modelPath filesystem path to a DeepFilterNet model tar.gz
+     * (extracted from the APK assets).
+     * @param attenLimDb maximum noise attenuation in dB; 0 or >= 100 means
+     * unlimited.
+     * @param minDbThresh local-SNR noise gate: frames below are fully muted
+     * (libDF default -10).
+     * @param maxDbErbThresh local SNR above which ERB enhancement is
+     * bypassed (libDF default 30).
+     * @param maxDbDfThresh local SNR above which deep filtering is bypassed
+     * (libDF default 20).
+     * @param postFilter enable the attenuation-sharpening post filter.
+     * @param postFilterBeta post filter strength; <= 0 uses the library
+     * default.
+     * @return native handle, or 0 on failure (missing or unloadable model).
      */
-    static native long nativeNew(float attenLimDb);
+    static native long nativeNew(
+        String modelPath, float attenLimDb, float minDbThresh, float maxDbErbThresh,
+        float maxDbDfThresh, boolean postFilter, float postFilterBeta);
 
     /** Samples per processing frame (480 for the 48 kHz DFN3 model). */
     static native int nativeFrameLength(long handle);

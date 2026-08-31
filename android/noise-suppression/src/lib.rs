@@ -426,8 +426,8 @@ mod tests {
     const WARMUP_FRAMES: usize = 10;
 
     /// Model archives ship as Android SDK assets; tests load them from there.
-    const DFN3: &str = "DeepFilterNet3_onnx.tar.gz";
-    const DFN3_LL: &str = "DeepFilterNet3_ll_onnx.tar.gz";
+    const DFN3: &str = "DeepFilterNet3_onnx.tgz";
+    const DFN3_LL: &str = "DeepFilterNet3_ll_onnx.tgz";
 
     fn model_path(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))

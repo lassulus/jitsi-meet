@@ -28,8 +28,15 @@ extra assets.
   feeds the DFN3 hop size of 480 samples directly; 16 and 32 kHz streams
   (e.g. Bluetooth HFP headsets) are resampled to 48 kHz inside the engine.
 
-Noise cancellation is **enabled by default**. Hosting apps can toggle it at
-runtime:
+Noise cancellation is **enabled by default** and configurable from the app's
+Settings screen (Noise suppression section): model choice (DeepFilterNet 3 /
+DeepFilterNet 3 LL), strength presets (Gentle / Balanced / Aggressive), a
+maximum-attenuation slider and the post filter. Models ship as APK assets
+(`android/sdk/src/main/assets/noise-suppression/*.tgz` — the `.tgz` name
+avoids AAPT's gunzip-and-strip handling of `.gz` assets) and are extracted
+to the cache dir on first use. Settings persist natively (SharedPreferences)
+and hot-swap the engine mid-call. Hosting apps embedding the SDK can also
+toggle programmatically:
 
 ```java
 org.jitsi.meet.sdk.NoiseSuppression.setEnabled(false);

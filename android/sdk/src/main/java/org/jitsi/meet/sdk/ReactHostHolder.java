@@ -72,6 +72,7 @@ class ReactHostHolder {
                 new ExternalAPIModule(reactContext),
                 new LocaleDetector(reactContext),
                 new LogBridgeModule(reactContext),
+                new NoiseSuppressionModule(reactContext),
                 new PictureInPictureModule(reactContext),
                 new ProximityModule(reactContext)));
 
@@ -225,8 +226,8 @@ class ReactHostHolder {
             }
         }
 
-        // Install DeepFilterNet3 noise cancellation on the capture path.
-        NoiseSuppression.install(options);
+        // Install DeepFilterNet noise cancellation on the capture path.
+        NoiseSuppression.install(app, options);
 
         JitsiMeetLogger.d(TAG + " initializing RN");
 

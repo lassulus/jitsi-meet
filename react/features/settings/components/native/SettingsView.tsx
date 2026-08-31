@@ -26,6 +26,7 @@ import ConferenceSection from './ConferenceSection';
 import GeneralSection from './GeneralSection';
 import LinksSection from './LinksSection';
 import ModeratorSection from './ModeratorSection';
+import NoiseSuppressionSection from './NoiseSuppressionSection';
 import NotificationsSection from './NotificationsSection';
 import { AVATAR_SIZE } from './constants';
 import styles from './styles';
@@ -91,6 +92,8 @@ const SettingsView = ({ isInWelcomePage }: IProps) => {
                     </> }
                 <Divider style = { styles.fieldSeparator as ViewStyle } />
                 <AdvancedSection />
+                <Divider style = { styles.fieldSeparator as ViewStyle } />
+                <NoiseSuppressionSection />
                 <Divider style = { styles.fieldSeparator as ViewStyle } />
                 <LinksSection />
             </ScrollView>

@@ -16,26 +16,31 @@
 
 package org.jitsi.meet.sdk;
 
+import android.content.Context;
+
 import com.oney.WebRTCModule.WebRTCModuleOptions;
 
 import org.jitsi.meet.sdk.log.JitsiMeetLogger;
 import org.webrtc.ExternalAudioProcessingFactory;
 
 /**
- * Deep-learning noise cancellation (DeepFilterNet3) for the microphone
+ * Deep-learning noise cancellation (DeepFilterNet) for the microphone
  * capture path.
  *
  * The suppressor is installed as a WebRTC APM capture post-processor via the
  * webrtc-sdk {@link ExternalAudioProcessingFactory}, so it runs after echo
  * cancellation and before the audio encoder, for every conference. It is
- * enabled by default; {@link #setEnabled(boolean)} toggles it at runtime with
- * no renegotiation.
+ * enabled by default; model and aggressiveness are configurable at runtime
+ * (see {@link NoiseSuppressionConfig}) with no renegotiation — engines are
+ * swapped mid-call. Configuration persists across app restarts.
  */
 public final class NoiseSuppression {
     private static final String TAG = NoiseSuppression.class.getSimpleName();
 
+    private static Context appContext;
     private static ExternalAudioProcessingFactory factory;
-    private static boolean enabled = true;
+    private static DeepFilterNoiseSuppressor suppressor;
+    private static NoiseSuppressionConfig config = new NoiseSuppressionConfig();
 
     private NoiseSuppression() {
     }
@@ -44,7 +49,7 @@ public final class NoiseSuppression {
      * Installs the noise suppressor into the WebRTC module options. Called
      * once before the React Native runtime (and thus WebRTC) is initialized.
      */
-    static synchronized void install(WebRTCModuleOptions options) {
+    static synchronized void install(Context context, WebRTCModuleOptions options) {
         if (factory != null || options.audioProcessingFactory != null) {
             return;
         }
@@ -60,34 +65,76 @@ public final class NoiseSuppression {
             // initializes. Loading is idempotent.
             System.loadLibrary("jingle_peerconnection_so");
 
+            appContext = context.getApplicationContext();
+            config = NoiseSuppressionConfig.load(appContext);
+            suppressor = new DeepFilterNoiseSuppressor(appContext, config);
             factory = new ExternalAudioProcessingFactory();
-            factory.setCapturePostProcessing(new DeepFilterNoiseSuppressor());
-            factory.setBypassFlagForCapturePost(!enabled);
-            options.audioProcessingFactory = factory;
-            JitsiMeetLogger.i(TAG + " installed DeepFilterNet3 capture post-processor");
+            factory.setCapturePostProcessing(suppressor);
+            factory.setBypassFlagForCapturePost(!config.enabled);
+            JitsiMeetLogger.i(
+                TAG + " installed DeepFilterNet capture post-processor: model=" + config.model.key
+                    + " enabled=" + config.enabled);
         } catch (UnsatisfiedLinkError | RuntimeException e) {
             JitsiMeetLogger.e(e, TAG + " failed to install");
             factory = null;
+            suppressor = null;
         }
+    }
+
+    /** Whether the suppressor is installed and operational. */
+    public static synchronized boolean isAvailable() {
+        return factory != null;
     }
 
     /**
      * Enables or disables noise cancellation for the local microphone. Safe
-     * to call at any time, including mid-conference.
+     * to call at any time, including mid-conference. Persisted.
      */
     public static synchronized void setEnabled(boolean on) {
-        enabled = on;
+        config.enabled = on;
         if (factory != null) {
             factory.setBypassFlagForCapturePost(!on);
+        }
+        if (appContext != null) {
+            config.save(appContext);
         }
     }
 
     /**
-     * Whether noise cancellation is currently enabled. Note this reflects the
-     * requested state; if the native engine failed to load, no suppression
-     * takes place regardless.
+     * Whether noise cancellation is currently enabled. Note this reflects
+     * the requested state; if the native engine failed to load, no
+     * suppression takes place regardless.
      */
     public static synchronized boolean isEnabled() {
-        return enabled && factory != null;
+        return config.enabled && factory != null;
+    }
+
+    /** Snapshot of the current configuration. */
+    static synchronized NoiseSuppressionConfig getConfig() {
+        return config.copy();
+    }
+
+    /**
+     * Applies and persists a new configuration. If engine parameters
+     * changed, a new engine is built in the background and hot-swapped into
+     * the running audio pipeline.
+     */
+    static synchronized void applyConfig(NoiseSuppressionConfig newConfig) {
+        boolean rebuild = config.needsNewEngine(newConfig);
+        boolean enabledChanged = config.enabled != newConfig.enabled;
+        config = newConfig.copy();
+
+        if (appContext != null) {
+            config.save(appContext);
+        }
+        if (factory == null) {
+            return;
+        }
+        if (enabledChanged) {
+            factory.setBypassFlagForCapturePost(!config.enabled);
+        }
+        if (rebuild && suppressor != null) {
+            suppressor.applyConfig(config);
+        }
     }
 }
