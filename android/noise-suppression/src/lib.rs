@@ -3,11 +3,11 @@
 //! Java-side contract (`org.jitsi.meet.sdk.DeepFilterNet`, loaded via
 //! `System.loadLibrary("dfjni")`):
 //!
-//! - `long nativeNew(int model, float attenLimDb, float minDbThresh, float maxDbErbThresh, float maxDbDfThresh, boolean postFilter, float postFilterBeta)`
-//!   — create a single-channel engine with an embedded model: `model` 1 =
-//!   DeepFilterNet3, 2 = DeepFilterNet3-LL. Model id 0 (DeepFilterNet2) is
-//!   reserved but always fails — the pinned deep_filter v0.5.6 deprecates
-//!   DeepFilterNet2 models — and any other value fails too.
+//! - `long nativeNew(String modelPath, float attenLimDb, float minDbThresh, float maxDbErbThresh, float maxDbDfThresh, boolean postFilter, float postFilterBeta)`
+//!   — create a single-channel engine from the DeepFilterNet model archive
+//!   (tar.gz, as shipped in the SDK assets) at filesystem path `modelPath`.
+//!   Only DeepFilterNet3-family models work: the pinned deep_filter v0.5.6
+//!   deprecates DeepFilterNet2 models and fails to load them.
 //!   `attenLimDb == 0` or `>= 100` means no attenuation limit
 //!   (full suppression), otherwise the enhanced signal is mixed with the
 //!   noisy input so noise is reduced by at most that many dB.
@@ -17,7 +17,7 @@
 //!   above `maxDbDfThresh` only the ERB stage runs. `postFilter` enables the
 //!   DFN post filter for extra attenuation of noisy bins; `postFilterBeta <=
 //!   0` keeps the library's default beta. Returns a handle, or 0 on any
-//!   failure (including an unknown model id). Never throws.
+//!   failure (unreadable, unparseable or deprecated model). Never throws.
 //! - `int nativeFrameLength(long handle)` — model hop size in samples
 //!   (480 at 48 kHz). 0 for an invalid handle.
 //! - `int nativeSampleRate(long handle)` — model sample rate (48000).
@@ -40,37 +40,20 @@
 //! thread may change between invocations.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use df::tract::{DfParams, DfTract, RuntimeParams};
-use jni::objects::{JByteBuffer, JClass};
+use jni::objects::{JByteBuffer, JClass, JString};
 use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::JNIEnv;
 use ndarray::Array2;
 use rubato::{FftFixedInOut, Resampler};
 
-/// Model id for DeepFilterNet2. Recognized but always rejected: deep_filter
-/// v0.5.6 hard-deprecates DeepFilterNet2 models ("Please use version v0.3.1",
-/// libDF tract.rs), and its tract 0.19 backend cannot even build the DFN2
-/// encoder graph, so the archive is not shipped at all.
-pub const MODEL_DEEPFILTERNET2: i32 = 0;
-/// Model id for the embedded DeepFilterNet3 archive.
-pub const MODEL_DEEPFILTERNET3: i32 = 1;
-/// Model id for the embedded low-latency DeepFilterNet3 archive.
-pub const MODEL_DEEPFILTERNET3_LL: i32 = 2;
-
-// Official ONNX model archives from the DeepFilterNet v0.5.6 release tag
-// (byte-identical to models/*.tar.gz in Rikorose/DeepFilterNet@v0.5.6).
-static MODEL_DFN3: &[u8] = include_bytes!("../models/DeepFilterNet3_onnx.tar.gz");
-static MODEL_DFN3_LL: &[u8] = include_bytes!("../models/DeepFilterNet3_ll_onnx.tar.gz");
-
-/// Runtime configuration for [`Engine::new`], mirroring the JNI `nativeNew`
-/// contract one to one.
+/// Runtime tuning for [`Engine::new`], mirroring the JNI `nativeNew`
+/// contract one to one (minus the model path).
 #[derive(Clone, Copy, Debug)]
 pub struct EngineConfig {
-    /// Embedded model: [`MODEL_DEEPFILTERNET3`] or [`MODEL_DEEPFILTERNET3_LL`].
-    /// [`MODEL_DEEPFILTERNET2`] and any other value are rejected.
-    pub model: i32,
     /// Attenuation limit in dB; 0 (or >= 100) means unlimited.
     pub atten_lim_db: f32,
     /// LSNR below which the output is muted entirely (libDF default -10).
@@ -87,11 +70,10 @@ pub struct EngineConfig {
 }
 
 impl Default for EngineConfig {
-    /// DeepFilterNet3 with the libDF runtime defaults and no attenuation
-    /// limit — the previous hardcoded behavior of this crate.
+    /// The libDF runtime defaults with no attenuation limit — the previous
+    /// hardcoded behavior of this crate.
     fn default() -> Self {
         Self {
-            model: MODEL_DEEPFILTERNET3,
             atten_lim_db: 0.0,
             min_db_thresh: -10.0,
             max_db_erb_thresh: 30.0,
@@ -185,16 +167,11 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Create an engine using one of the embedded models per `config`.
-    pub fn new(config: EngineConfig) -> Result<Self> {
-        let model: &'static [u8] = match config.model {
-            MODEL_DEEPFILTERNET3 => MODEL_DFN3,
-            MODEL_DEEPFILTERNET3_LL => MODEL_DFN3_LL,
-            MODEL_DEEPFILTERNET2 => bail!(
-                "DeepFilterNet2 models are deprecated in deep_filter v0.5.6 and not shipped"
-            ),
-            id => bail!("unknown model id {id}"),
-        };
+    /// Create an engine from the DeepFilterNet model archive (tar.gz) at
+    /// `model_path`, tuned per `config`.
+    pub fn new(model_path: &Path, config: EngineConfig) -> Result<Self> {
+        let dfp = DfParams::new(model_path.to_path_buf())
+            .with_context(|| format!("failed to load model archive {}", model_path.display()))?;
         let mut rp = RuntimeParams::default_with_ch(1).with_thresholds(
             config.min_db_thresh,
             config.max_db_erb_thresh,
@@ -213,7 +190,6 @@ impl Engine {
                 rp.post_filter = true;
             }
         }
-        let dfp = DfParams::from_bytes(model).context("failed to parse model archive")?;
         let df = DfTract::new(dfp, &rp).context("failed to init DfTract")?;
         // The 10 ms framing contract below relies on the model hop being
         // exactly 10 ms (480 samples at 48 kHz).
@@ -314,9 +290,9 @@ unsafe fn engine_mut<'a>(handle: jlong) -> Option<&'a mut Engine> {
 
 #[no_mangle]
 pub extern "system" fn Java_org_jitsi_meet_sdk_DeepFilterNet_nativeNew(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
-    model: jint,
+    model_path: JString,
     atten_lim_db: jfloat,
     min_db_thresh: jfloat,
     max_db_erb_thresh: jfloat,
@@ -325,7 +301,6 @@ pub extern "system" fn Java_org_jitsi_meet_sdk_DeepFilterNet_nativeNew(
     post_filter_beta: jfloat,
 ) -> jlong {
     let config = EngineConfig {
-        model,
         atten_lim_db,
         min_db_thresh,
         max_db_erb_thresh,
@@ -333,10 +308,16 @@ pub extern "system" fn Java_org_jitsi_meet_sdk_DeepFilterNet_nativeNew(
         post_filter: post_filter != 0,
         post_filter_beta,
     };
-    catch_unwind(|| match Engine::new(config) {
-        Ok(engine) => Box::into_raw(Box::new(engine)) as jlong,
-        Err(_) => 0,
-    })
+    catch_unwind(AssertUnwindSafe(|| {
+        let path: String = match env.get_string(&model_path) {
+            Ok(s) => s.into(),
+            Err(_) => return 0,
+        };
+        match Engine::new(Path::new(&path), config) {
+            Ok(engine) => Box::into_raw(Box::new(engine)) as jlong,
+            Err(_) => 0,
+        }
+    }))
     .unwrap_or(0)
 }
 
@@ -422,9 +403,8 @@ pub extern "system" fn Java_org_jitsi_meet_sdk_DeepFilterNet_nativeFree(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Engine, EngineConfig, MODEL_DEEPFILTERNET2, MODEL_DEEPFILTERNET3, MODEL_DEEPFILTERNET3_LL,
-    };
+    use super::{Engine, EngineConfig};
+    use std::path::{Path, PathBuf};
 
     /// Deterministic white-noise source in [-1, 1) (LCG; avoids a rand dep).
     struct Lcg(u64);
@@ -445,12 +425,27 @@ mod tests {
 
     const WARMUP_FRAMES: usize = 10;
 
+    /// Model archives ship as Android SDK assets; tests load them from there.
+    const DFN3: &str = "DeepFilterNet3_onnx.tar.gz";
+    const DFN3_LL: &str = "DeepFilterNet3_ll_onnx.tar.gz";
+
+    fn model_path(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../sdk/src/main/assets/noise-suppression")
+            .join(name)
+    }
+
     /// DFN3 defaults with the given attenuation limit (the old constructor).
     fn cfg(atten_lim_db: f32) -> EngineConfig {
         EngineConfig {
             atten_lim_db,
             ..EngineConfig::default()
         }
+    }
+
+    /// DeepFilterNet3 engine with the given attenuation limit.
+    fn dfn3(atten_lim_db: f32) -> Engine {
+        Engine::new(&model_path(DFN3), cfg(atten_lim_db)).expect("engine init")
     }
 
     /// Feed 2 s of deterministic white noise at 48 kHz and return the
@@ -478,7 +473,7 @@ mod tests {
 
     #[test]
     fn white_noise_is_attenuated() {
-        let mut engine = Engine::new(cfg(0.0)).expect("engine init");
+        let mut engine = dfn3(0.0);
         assert_eq!(engine.sample_rate(), 48000);
         assert_eq!(engine.frame_length(), 480);
 
@@ -491,16 +486,10 @@ mod tests {
     }
 
     #[test]
-    fn all_embedded_models_attenuate_white_noise() {
-        for (model, name) in [
-            (MODEL_DEEPFILTERNET3, "DeepFilterNet3"),
-            (MODEL_DEEPFILTERNET3_LL, "DeepFilterNet3-LL"),
-        ] {
-            let mut engine = Engine::new(EngineConfig {
-                model,
-                ..EngineConfig::default()
-            })
-            .unwrap_or_else(|e| panic!("{name} init failed: {e}"));
+    fn all_shipped_models_attenuate_white_noise() {
+        for (file, name) in [(DFN3, "DeepFilterNet3"), (DFN3_LL, "DeepFilterNet3-LL")] {
+            let mut engine = Engine::new(&model_path(file), EngineConfig::default())
+                .unwrap_or_else(|e| panic!("{name} init failed: {e}"));
             assert_eq!(engine.sample_rate(), 48000, "{name} sample rate");
             assert_eq!(engine.frame_length(), 480, "{name} frame length");
 
@@ -514,19 +503,18 @@ mod tests {
     }
 
     #[test]
-    fn invalid_model_id_is_rejected() {
-        // Model 0 (DeepFilterNet2) is deprecated upstream and must fail
-        // cleanly, like every unknown id.
-        for model in [MODEL_DEEPFILTERNET2, 3, -1, i32::MAX] {
-            assert!(
-                Engine::new(EngineConfig {
-                    model,
-                    ..EngineConfig::default()
-                })
-                .is_err(),
-                "model id {model} must be rejected"
-            );
-        }
+    fn invalid_model_is_rejected() {
+        // Nonexistent path.
+        assert!(
+            Engine::new(Path::new("/nonexistent/model.tar.gz"), EngineConfig::default()).is_err(),
+            "nonexistent model path must be rejected"
+        );
+        // An existing file that is not a model archive.
+        let not_a_model = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(
+            Engine::new(&not_a_model, EngineConfig::default()).is_err(),
+            "non-model file must be rejected"
+        );
     }
 
     #[test]
@@ -534,11 +522,14 @@ mod tests {
         // postFilterBeta <= 0 keeps the library default; also try an explicit
         // beta. Both must construct and yield finite, non-NaN audio.
         for beta in [0.0f32, 0.05] {
-            let mut engine = Engine::new(EngineConfig {
-                post_filter: true,
-                post_filter_beta: beta,
-                ..EngineConfig::default()
-            })
+            let mut engine = Engine::new(
+                &model_path(DFN3),
+                EngineConfig {
+                    post_filter: true,
+                    post_filter_beta: beta,
+                    ..EngineConfig::default()
+                },
+            )
             .expect("post-filter engine init");
 
             let hop = engine.frame_length();
@@ -571,8 +562,8 @@ mod tests {
         // never silent even when the LSNR gate mutes a frame. This exercises
         // the attenLimDb > 0 path and gives a non-trivial signal for the
         // scaled-vs-unit comparison below.
-        let mut engine_scaled = Engine::new(cfg(6.0)).expect("engine init");
-        let mut engine_unit = Engine::new(cfg(6.0)).expect("engine init");
+        let mut engine_scaled = dfn3(6.0);
+        let mut engine_unit = dfn3(6.0);
 
         let hop = engine_scaled.frame_length();
         let sr = engine_scaled.sample_rate() as f32;
@@ -637,7 +628,7 @@ mod tests {
     #[test]
     fn white_noise_16k_is_attenuated() {
         const SCALE: f32 = 32768.0;
-        let mut engine = Engine::new(cfg(0.0)).expect("engine init");
+        let mut engine = dfn3(0.0);
 
         let n = 160; // 10 ms at 16 kHz
         let n_frames = 200; // 2 s
@@ -671,7 +662,7 @@ mod tests {
         // Same rationale as `int16_scale_path_matches_unit_scale`: a 6 dB
         // attenuation limit guarantees a non-silent output, proving the
         // resampled path carries real audio end to end.
-        let mut engine = Engine::new(cfg(6.0)).expect("engine init");
+        let mut engine = dfn3(6.0);
 
         let n = 160; // 10 ms at 16 kHz
         let sr = 16_000.0f32;
@@ -713,7 +704,7 @@ mod tests {
 
     #[test]
     fn unsupported_input_is_rejected_with_buffer_untouched() {
-        let mut engine = Engine::new(cfg(0.0)).expect("engine init");
+        let mut engine = dfn3(0.0);
 
         // Unsupported rate, even with a matching 10 ms frame.
         let mut frame_441 = vec![0.25f32; 441];
@@ -736,7 +727,7 @@ mod tests {
 
     #[test]
     fn rate_switch_mid_stream_works() {
-        let mut engine = Engine::new(cfg(0.0)).expect("engine init");
+        let mut engine = dfn3(0.0);
         let mut rng = Lcg(0x0bad_5eed_0bad_5eed);
 
         for &(rate, frames) in &[(48_000usize, 20usize), (16_000, 20), (48_000, 20), (32_000, 20)]
