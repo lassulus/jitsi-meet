@@ -71,6 +71,7 @@ public final class NoiseSuppression {
             factory = new ExternalAudioProcessingFactory();
             factory.setCapturePostProcessing(suppressor);
             factory.setBypassFlagForCapturePost(!config.enabled);
+            options.audioProcessingFactory = factory;
             JitsiMeetLogger.i(
                 TAG + " installed DeepFilterNet capture post-processor: model=" + config.model.key
                     + " enabled=" + config.enabled);
